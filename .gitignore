@@ -10,3 +10,7 @@ coverage.out
 AGENTS.md
 CLAUDE.md
 docs/reference/hotel-AGENTS.md
+
+**/tmp/
+*~
+
