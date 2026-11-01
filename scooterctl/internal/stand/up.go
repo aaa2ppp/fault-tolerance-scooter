@@ -249,7 +249,7 @@ func (m *Manager) deployServices(
 	for _, service := range services {
 		image := state.Images[service.Name]
 		fmt.Fprintf(m.Streams.Out, "Deploying %s (%s)\n", service.Name, image)
-		if err := m.Runtime.Import(ctx, state, image, m.Config.StateDir(), m.Streams.Out); err != nil {
+		if err := m.Runtime.Import(ctx, state, image, m.Streams.Out); err != nil {
 			return err
 		}
 		objects, err := kube.Render(m.Config.Root, service, image)

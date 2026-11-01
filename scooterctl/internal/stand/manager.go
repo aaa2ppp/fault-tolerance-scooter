@@ -20,7 +20,7 @@ type Runtime interface {
 	Kubeconfig(context.Context, *project.State) ([]byte, error)
 	Status(context.Context, *project.State) (project.RuntimeStatus, error)
 	Build(context.Context, string, config.Service, io.Writer) (string, error)
-	Import(context.Context, *project.State, string, string, io.Writer) error
+	Import(context.Context, *project.State, string, io.Writer) error
 	Stop(context.Context, *project.State) error
 	Destroy(context.Context, *project.State) error
 	Exec(context.Context, *project.State, []string, io.Reader, io.Writer, io.Writer) error

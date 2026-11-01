@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"archive/tar"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
+	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/iostreams"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/project"
 	archive "github.com/moby/go-archive"
 	"github.com/moby/patternmatcher/ignorefile"
@@ -98,66 +99,37 @@ func consumeProgress(reader io.Reader, out io.Writer) error {
 	}
 }
 
-func (e *Engine) Import(ctx context.Context, s *project.State, imageName, dir string, out io.Writer) error {
-	stream, err := e.client.ImageSave(ctx, []string{imageName})
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-	f, err := os.CreateTemp(dir, "image-*.tar")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	size, err := io.Copy(f, stream)
-	if err != nil {
-		return err
-	}
-	if _, err = f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	reader, writer := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		tw := tar.NewWriter(writer)
-		err := tw.WriteHeader(&tar.Header{
-			Name: "scooterctl-image.tar",
-			Mode: 0600,
-			Size: size,
-		})
-		if err == nil {
-			_, err = io.Copy(tw, f)
+func (e *Engine) Import(ctx context.Context, s *project.State, imageName string, out io.Writer) error {
+	cmd := []string{"ctr", "-n", "k8s.io", "images", "import"}
+
+	if named, err := reference.ParseAnyReference(imageName); err == nil {
+		if _, digested := named.(reference.Digested); digested {
+			if n, ok := named.(reference.Named); ok {
+				cmd = append(cmd, "-digests", "-base-name", n.Name())
+			}
 		}
-		if closeErr := tw.Close(); err == nil {
-			err = closeErr
-		}
-		_ = writer.CloseWithError(err)
-		done <- err
+	}
+
+	cmd = append(cmd, "-")
+
+	saveStream, err := e.client.ImageSave(ctx, []string{imageName})
+	if err != nil {
+		return err
+	}
+	defer saveStream.Close()
+
+	out = iostreams.NewSafeWriter(out)
+	lo := iostreams.NewLineWriter(out)
+	le := iostreams.NewLineWriter(out)
+	defer func() {
+		_ = lo.Flush()
+		_ = le.Flush()
 	}()
-	err = e.client.CopyToContainer(ctx, ContainerName(s), "/tmp", reader, container.CopyToContainerOptions{})
-	_ = reader.CloseWithError(err)
-	copyErr := <-done
-	if err != nil {
-		return err
-	}
-	if copyErr != nil {
-		return copyErr
-	}
-	importErr := e.Exec(ctx, s, []string{
-		"ctr",
-		"-n",
-		"k8s.io",
-		"images",
-		"import",
-		"/tmp/scooterctl-image.tar",
-	}, nil, out, out)
-	cleanupErr := e.Exec(ctx, s, []string{
-		"rm",
-		"-f",
-		"/tmp/scooterctl-image.tar",
-	}, nil, io.Discard, io.Discard)
-	return errors.Join(importErr, cleanupErr)
+
+	return e.Exec(ctx, s, cmd, saveStream,
+		iostreams.NewPrefixWriter(lo, "ctr[1]: "),
+		iostreams.NewPrefixWriter(le, "ctr[2]: "),
+	)
 }
 
 func (e *Engine) Exec(
