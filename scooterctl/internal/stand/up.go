@@ -8,6 +8,7 @@ import (
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/kube"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/project"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func (m *Manager) Up(ctx context.Context, services []config.Service) (err error) {
@@ -118,7 +119,39 @@ func (m *Manager) deploy(
 	services []config.Service,
 	client *kube.Client,
 ) error {
-	// Validate/render all selected manifests before mutating Kubernetes resources.
+	if err := m.validateManifests(state, services); err != nil {
+		return err
+	}
+	envoy, err := kube.RenderEnvoy(m.Config)
+	if err != nil {
+		return err
+	}
+	if err := m.deployEnvoy(ctx, envoy, client); err != nil {
+		return err
+	}
+	if kube.NeedsDependencies(services) {
+		resources, err := kube.RenderDependencies(m.Config.Root)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(m.Streams.Out, "Запуск PostgreSQL, Kafka и отдельного config-etcd")
+		if err := m.deployDependencies(ctx, state, resources, client); err != nil {
+			return err
+		}
+		fmt.Fprintln(m.Streams.Out, "Применение миграций и учебных данных")
+		if err := m.applyMigrations(ctx, resources, client); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(m.Streams.Out, "Деплой сервисов")
+	if err := m.deployServices(ctx, state, services, client); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Validate/render all selected manifests before mutating Kubernetes resources.
+func (m *Manager) validateManifests(state *project.State, services []config.Service) error {
 	for _, service := range services {
 		image := state.Images[service.Name]
 		if image == "" {
@@ -128,60 +161,92 @@ func (m *Manager) deploy(
 			return err
 		}
 	}
-	envoy, err := kube.RenderEnvoy(m.Config)
-	if err != nil {
+	return nil
+}
+
+func (m *Manager) deployEnvoy(
+	ctx context.Context,
+	envoy []*unstructured.Unstructured,
+	client *kube.Client,
+) error {
+	if err := client.Apply(ctx, envoy, m.Streams.Out); err != nil {
 		return err
 	}
-	if err = client.Apply(ctx, envoy, m.Streams.Out); err != nil {
+	service := kube.EnvoyService()
+	if err := client.WaitDeployment(ctx, service); err != nil {
 		return err
 	}
-	if err = client.WaitDeployment(ctx, kube.EnvoyService()); err != nil {
+	return nil
+}
+
+func (m *Manager) ensureValkeyInitialized(
+	ctx context.Context,
+	state *project.State,
+	client *kube.Client,
+) error {
+	if err := client.WaitValkeyRunning(ctx); err != nil {
 		return err
 	}
-	if kube.NeedsDependencies(services) {
-		resources, err := kube.RenderDependencies(m.Config.Root)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(m.Streams.Out, "Запуск PostgreSQL, Kafka, Valkey и отдельного config-etcd")
-		if err = client.Apply(ctx, resources.Infrastructure, m.Streams.Out); err != nil {
-			return err
-		}
-		for _, name := range []string{
-			"rental-postgres",
-			"pricing-postgres",
-			"profile-postgres",
-			"scooter-postgres",
-			"rental-kafka",
-			"config-etcd",
-			"akhq",
-		} {
-			if err = client.WaitDeployment(ctx, config.Service{
-				Name:       name,
-				Deployment: name,
-				Namespace:  "scooterflow",
-			}); err != nil {
-				return err
-			}
-		}
-		if err = client.WaitValkeyRunning(ctx); err != nil {
-			return err
-		}
-		bootstrap := []string{"kubectl", "-n", "scooterflow", "exec", "valkey-0", "--", "sh", "-ec", kube.BootstrapValkey}
-		if err = m.Runtime.Exec(ctx, state, bootstrap, nil, m.Streams.Out, m.Streams.ErrOut); err != nil {
-			return fmt.Errorf("инициализация Valkey: %w", err)
-		}
-		if err = client.WaitValkey(ctx); err != nil {
-			return err
-		}
-		fmt.Fprintln(m.Streams.Out, "Применение миграций и учебных данных")
-		if err = client.Apply(ctx, resources.Migrations, m.Streams.Out); err != nil {
-			return err
-		}
-		if err = client.WaitJob(ctx, "scooterflow", resources.JobName); err != nil {
+	bootstrap := []string{"kubectl", "-n", "scooterflow", "exec", "valkey-0", "--", "sh", "-ec", kube.BootstrapValkey}
+	if err := m.Runtime.Exec(ctx, state, bootstrap, nil, m.Streams.Out, m.Streams.ErrOut); err != nil {
+		return fmt.Errorf("инициализация Valkey: %w", err)
+	}
+	if err := client.WaitValkey(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) deployDependencies(
+	ctx context.Context,
+	state *project.State,
+	resources kube.DependencyResources,
+	client *kube.Client,
+) error {
+	if err := client.Apply(ctx, resources.Infrastructure, m.Streams.Out); err != nil {
+		return err
+	}
+	for _, name := range []string{
+		"rental-postgres",
+		"pricing-postgres",
+		"profile-postgres",
+		"scooter-postgres",
+		"rental-kafka",
+		"config-etcd",
+		"akhq",
+	} {
+		if err := client.WaitDeployment(ctx, config.Service{
+			Name:       name,
+			Deployment: name,
+			Namespace:  "scooterflow",
+		}); err != nil {
 			return err
 		}
 	}
+	m.ensureValkeyInitialized(ctx, state, client)
+	return nil
+}
+
+func (m *Manager) applyMigrations(
+	ctx context.Context,
+	resources kube.DependencyResources,
+	client *kube.Client,
+) error {
+	if err := client.Apply(ctx, resources.Migrations, m.Streams.Out); err != nil {
+		return err
+	}
+	if err := client.WaitJob(ctx, "scooterflow", resources.JobName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) deployServices(
+	ctx context.Context,
+	state *project.State,
+	services []config.Service,
+	client *kube.Client,
+) error {
 	for _, service := range services {
 		image := state.Images[service.Name]
 		fmt.Fprintf(m.Streams.Out, "Deploying %s (%s)\n", service.Name, image)
