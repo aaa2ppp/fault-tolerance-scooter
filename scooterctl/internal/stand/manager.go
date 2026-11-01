@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/docker/docker/api/types/image"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/fault"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/iostreams"
@@ -21,6 +22,7 @@ type Runtime interface {
 	Status(context.Context, *project.State) (project.RuntimeStatus, error)
 	Build(context.Context, string, config.Service, io.Writer) (string, error)
 	Import(context.Context, *project.State, string, io.Writer) error
+	Pull(context.Context, string, io.Writer) (image.InspectResponse, error)
 	Stop(context.Context, *project.State) error
 	Destroy(context.Context, *project.State) error
 	Exec(context.Context, *project.State, []string, io.Reader, io.Writer, io.Writer) error

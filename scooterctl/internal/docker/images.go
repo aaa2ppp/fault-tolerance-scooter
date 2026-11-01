@@ -13,6 +13,8 @@ import (
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/iostreams"
@@ -213,4 +215,27 @@ func demultiplex(ctx context.Context, reader io.ReadCloser, out, errOut io.Write
 	}()
 	_, err := stdcopy.StdCopy(out, errOut, reader)
 	return err
+}
+
+func (e *Engine) Pull(ctx context.Context, ref string, out io.Writer) (image.InspectResponse, error) {
+	info, err := e.client.ImageInspect(ctx, ref)
+	if err != nil && !errdefs.IsNotFound(err) {
+		return image.InspectResponse{}, err
+	}
+	if errdefs.IsNotFound(err) {
+		fmt.Fprintf(out, "Downloading %s\n", ref)
+		stream, err := e.client.ImagePull(ctx, ref, image.PullOptions{})
+		if err != nil {
+			return image.InspectResponse{}, err
+		}
+		err = consumeProgress(stream, out)
+		stream.Close()
+		if err != nil {
+			return image.InspectResponse{}, err
+		}
+		if info, err = e.client.ImageInspect(ctx, ref); err != nil {
+			return image.InspectResponse{}, err
+		}
+	}
+	return info, nil
 }
