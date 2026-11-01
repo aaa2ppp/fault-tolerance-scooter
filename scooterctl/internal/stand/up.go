@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
+	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/env"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/kube"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/project"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -113,6 +114,8 @@ func (m *Manager) build(ctx context.Context, state *project.State, services []co
 	return nil
 }
 
+var needPreload = env.OnEnv("PRELOAD")
+
 func (m *Manager) deploy(
 	ctx context.Context,
 	state *project.State,
@@ -122,18 +125,40 @@ func (m *Manager) deploy(
 	if err := m.validateManifests(state, services); err != nil {
 		return err
 	}
+
+	var preload []*unstructured.Unstructured
+
 	envoy, err := kube.RenderEnvoy(m.Config)
 	if err != nil {
 		return err
 	}
-	if err := m.deployEnvoy(ctx, envoy, client); err != nil {
-		return err
-	}
-	if kube.NeedsDependencies(services) {
-		resources, err := kube.RenderDependencies(m.Config.Root)
+	preload = append(preload, envoy...)
+
+	var resources kube.DependencyResources
+	needsDependencies := kube.NeedsDependencies(services)
+	if needsDependencies {
+		var err error
+		resources, err = kube.RenderDependencies(m.Config.Root)
 		if err != nil {
 			return err
 		}
+		preload = append(preload, resources.Infrastructure...)
+		preload = append(preload, resources.Migrations...)
+	}
+
+	if needPreload {
+		fmt.Fprintln(m.Streams.Out, "Предзагрузка образов зависимостей")
+		if err := m.preload(ctx, state, kube.Images(preload)); err != nil {
+			return err
+		}
+	}
+
+	fmt.Fprintln(m.Streams.Out, "Запуск Envoy")
+	if err := m.deployEnvoy(ctx, envoy, client); err != nil {
+		return err
+	}
+
+	if kube.NeedsDependencies(services) {
 		fmt.Fprintln(m.Streams.Out, "Запуск PostgreSQL, Kafka и отдельного config-etcd")
 		if err := m.deployDependencies(ctx, resources, client); err != nil {
 			return err
