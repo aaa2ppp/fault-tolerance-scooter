@@ -185,9 +185,15 @@ func (e *Engine) Exec(
 		return err
 	}
 	defer attach.Close()
+	var stdinErr <-chan error
 	if in != nil {
+		ch := make(chan error, 1)
+		stdinErr = ch
 		go func() {
-			_, _ = io.Copy(attach.Conn, in)
+			_, err := io.Copy(attach.Conn, in)
+			if err != nil {
+				ch <- err
+			}
 			_ = attach.CloseWrite()
 		}()
 	}
@@ -211,6 +217,13 @@ func (e *Engine) Exec(
 		return err
 	}
 	if status.ExitCode != 0 {
+		if stdinErr != nil {
+			select {
+			case e := <-stdinErr:
+				return fmt.Errorf("%s exited with code %d: stdin: %v", args[0], status.ExitCode, e)
+			default:
+			}
+		}
 		return fmt.Errorf("%s exited with code %d", args[0], status.ExitCode)
 	}
 	return nil
