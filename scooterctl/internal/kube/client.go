@@ -2,8 +2,11 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
@@ -62,6 +65,10 @@ func New(path string) (*Client, error) {
 	}, nil
 }
 
+type fatalError struct{ msg string }
+
+func (e *fatalError) Error() string { return e.msg }
+
 func Poll(ctx context.Context, description string, check func(context.Context) (bool, error)) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -70,6 +77,9 @@ func Poll(ctx context.Context, description string, check func(context.Context) (
 		ok, err := check(ctx)
 		if ok && err == nil {
 			return nil
+		}
+		if _, ok := errors.AsType[*fatalError](err); ok {
+			return fmt.Errorf("%s: %w", description, err)
 		}
 		last = err
 		select {
@@ -113,7 +123,7 @@ func (c *Client) WaitDeployment(ctx context.Context, s config.Service) error {
 		}
 		for _, condition := range d.Status.Conditions {
 			if condition.Reason == "ProgressDeadlineExceeded" {
-				return false, fmt.Errorf("deployment exceeded its progress deadline: %s", condition.Message)
+				return false, &fatalError{"deployment exceeded its progress deadline: " + condition.Message}
 			}
 		}
 		if d.Status.ObservedGeneration < d.Generation ||
@@ -136,5 +146,61 @@ func (c *Client) WaitDeployment(ctx context.Context, s config.Service) error {
 			}
 		}
 		return true, nil
+	})
+}
+
+func (c *Client) WaitDeployments(ctx context.Context, namespace string, deploymentNames []string, out io.Writer) error {
+	if len(deploymentNames) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	pending := make(map[string]bool, len(deploymentNames))
+	for _, name := range deploymentNames {
+		pending[name] = true
+	}
+
+	return Poll(ctx, "waiting for "+strings.Join(deploymentNames, ", "), func(ctx context.Context) (bool, error) {
+		dl, err := c.Typed.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		seen := make(map[string]bool, len(dl.Items))
+		for _, d := range dl.Items {
+			if !pending[d.Name] {
+				continue
+			}
+			seen[d.Name] = true
+
+			desired := int32(1)
+			if d.Spec.Replicas != nil {
+				desired = *d.Spec.Replicas
+			}
+
+			for _, condition := range d.Status.Conditions {
+				if condition.Reason == "ProgressDeadlineExceeded" {
+					return false, &fatalError{fmt.Sprintf("deployment %s exceeded its progress deadline: %s", d.Name, condition.Message)}
+				}
+			}
+
+			if d.Status.ObservedGeneration >= d.Generation &&
+				d.Status.UpdatedReplicas == desired &&
+				d.Status.AvailableReplicas == desired &&
+				d.Status.Replicas == desired {
+				if out != nil {
+					fmt.Fprintf(out, "deployment/%s ready after %v\n", d.Name, time.Since(start).Round(time.Second))
+				}
+				delete(pending, d.Name)
+			}
+		}
+
+		for name := range pending {
+			if !seen[name] && time.Since(start) > 5*time.Second {
+				return false, &fatalError{fmt.Sprintf("deployment %s/%s not found after 5s", namespace, name)}
+			}
+		}
+
+		return len(pending) == 0, nil
 	})
 }
