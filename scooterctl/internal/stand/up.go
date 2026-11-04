@@ -173,9 +173,11 @@ func (m *Manager) deployEnvoy(
 		return err
 	}
 	service := kube.EnvoyService()
+	start := time.Now()
 	if err := client.WaitDeployment(ctx, service); err != nil {
 		return err
 	}
+	fmt.Fprintf(m.Streams.Out, "deployment/%s ready after %v\n", service.Deployment, time.Since(start).Round(time.Second))
 	return nil
 }
 
@@ -206,7 +208,8 @@ func (m *Manager) deployDependencies(
 	if err := client.Apply(ctx, resources.Infrastructure, m.Streams.Out); err != nil {
 		return err
 	}
-	for _, name := range []string{
+
+	if err := client.WaitDeployments(ctx, "scooterflow", []string{
 		"rental-postgres",
 		"pricing-postgres",
 		"profile-postgres",
@@ -214,14 +217,8 @@ func (m *Manager) deployDependencies(
 		"rental-kafka",
 		"config-etcd",
 		"akhq",
-	} {
-		if err := client.WaitDeployment(ctx, config.Service{
-			Name:       name,
-			Deployment: name,
-			Namespace:  "scooterflow",
-		}); err != nil {
-			return err
-		}
+	}, m.Streams.Out); err != nil {
+		return err
 	}
 	m.ensureValkeyInitialized(ctx, state, client)
 	return nil
@@ -235,9 +232,11 @@ func (m *Manager) applyMigrations(
 	if err := client.Apply(ctx, resources.Migrations, m.Streams.Out); err != nil {
 		return err
 	}
+	start := time.Now()
 	if err := client.WaitJob(ctx, "scooterflow", resources.JobName); err != nil {
 		return err
 	}
+	fmt.Fprintf(m.Streams.Out, "job/%s done in %v\n", resources.JobName, time.Since(start).Round(time.Second))
 	return nil
 }
 
@@ -260,9 +259,11 @@ func (m *Manager) deployServices(
 		if err = client.Apply(ctx, objects, m.Streams.Out); err != nil {
 			return err
 		}
+		start := time.Now()
 		if err = client.WaitDeployment(ctx, service); err != nil {
 			return err
 		}
+		fmt.Fprintf(m.Streams.Out, "deployment/%s ready after %v\n", service.Deployment, time.Since(start).Round(time.Second))
 	}
 	return nil
 }
