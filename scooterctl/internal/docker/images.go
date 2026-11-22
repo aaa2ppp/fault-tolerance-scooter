@@ -2,10 +2,11 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +16,25 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
+	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/env"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/iostreams"
+	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/progress"
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/project"
+	"github.com/moby/buildkit/session"
 	archive "github.com/moby/go-archive"
 	"github.com/moby/patternmatcher/ignorefile"
 )
+
+var builderVer = build.BuilderBuildKit
+
+func init() {
+	if !env.OnEnv("DOCKER_BUILDKIT", true) {
+		builderVer = build.BuilderV1
+	}
+}
 
 func (e *Engine) Build(ctx context.Context, root string, s config.Service, out io.Writer) (string, error) {
 	dir := filepath.Join(root, s.Context)
@@ -41,25 +54,56 @@ func (e *Engine) Build(ctx context.Context, root string, s config.Service, out i
 		return "", err
 	}
 	defer archiveReader.Close()
+
 	tag := s.Image + ":local"
-	result, err := e.client.ImageBuild(
-		ctx,
-		archiveReader,
-		build.ImageBuildOptions{
-			Tags:       []string{tag},
-			Dockerfile: filepath.ToSlash(s.Dockerfile),
-			Remove:     true,
-			Version:    build.BuilderV1,
-		},
-	)
-	if err != nil {
-		return "", fmt.Errorf("build %s: %w", s.Name, err)
+	opts := build.ImageBuildOptions{
+		Tags:       []string{tag},
+		Dockerfile: filepath.ToSlash(s.Dockerfile),
+		Remove:     true,
+		Version:    builderVer,
 	}
-	err = consumeProgress(result.Body, out)
-	result.Body.Close()
+
+	// Сессия BuildKit (обязательна для Windows/macOS).
+	buildCtx, cancelBuild := context.WithCancel(ctx)
+
+	var sessDone chan struct{}
+	defer func() {
+		cancelBuild()
+		if sessDone != nil {
+			<-sessDone
+		}
+	}()
+
+	if builderVer == build.BuilderBuildKit {
+		sess, err := session.NewSession(buildCtx, "scooterctl")
+		if err != nil {
+			return "", fmt.Errorf("create buildkit session: %w", err)
+		}
+
+		sessDone = make(chan struct{}, 1)
+		go func() {
+			defer close(sessDone)
+			_ = sess.Run(buildCtx, func(ctx context.Context, proto string, meta map[string][]string) (net.Conn, error) {
+				return e.client.DialHijack(ctx, "/session", proto, meta)
+			})
+		}()
+		opts.SessionID = sess.ID()
+	}
+
+	result, err := e.client.ImageBuild(buildCtx, archiveReader, opts)
 	if err != nil {
+		hint := ""
+		if opts.Version == build.BuilderBuildKit {
+			hint = " (hint: set DOCKER_BUILDKIT=0 to use the legacy builder)"
+		}
+		return "", fmt.Errorf("build %s (builder=%s): %w%s", s.Name, opts.Version, err, hint)
+	}
+	defer result.Body.Close()
+
+	if err := consumeProgress(result.Body, out); err != nil {
 		return "", err
 	}
+
 	info, err := e.client.ImageInspect(ctx, tag)
 	if err != nil {
 		return "", err
@@ -72,33 +116,27 @@ func (e *Engine) Build(ctx context.Context, root string, s config.Service, out i
 	return immutable, e.client.ImageTag(ctx, tag, immutable)
 }
 
+// for dev only
+var rawProgress = env.OnEnv("RAW_BUILD_PROGRESS")
+
+func consumeProgressRaw(reader io.Reader, out io.Writer) error {
+	_, _ = io.Copy(out, reader)
+	return nil
+}
+
+// consumeProgress renders build progress from reader to out, transparently
+// handling both BuilderV1 JSON streams and BuildKit trace envelopes.
 func consumeProgress(reader io.Reader, out io.Writer) error {
-	decoder := json.NewDecoder(reader)
-	last := ""
-	for {
-		var event struct {
-			Stream string `json:"stream"`
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		}
-		err := decoder.Decode(&event)
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if event.Error != "" {
-			return errors.New(event.Error)
-		}
-		if event.Stream != "" {
-			fmt.Fprint(out, event.Stream)
-		}
-		if event.Status != "" && event.Status != last {
-			fmt.Fprintln(out, event.Status)
-			last = event.Status
-		}
+	if rawProgress {
+		return consumeProgressRaw(reader, out)
 	}
+	var lops slog.HandlerOptions
+	if env.Debug {
+		lops.Level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &lops))
+	r := progress.NewTraceRender(out, logger)
+	return jsonmessage.DisplayJSONMessagesStream(reader, out, 0, false, r.AuxCallback)
 }
 
 func (e *Engine) Import(ctx context.Context, s *project.State, imageName string, out io.Writer) error {
