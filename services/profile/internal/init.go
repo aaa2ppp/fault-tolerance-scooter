@@ -74,8 +74,12 @@ func (a *App) initMainServer(ctx context.Context) error {
 	)
 
 	a.publicCloser.Add(func() error {
+		atomic.StoreInt32(&a.terminated, 1)
 		gracefulCtx, cancel := context.WithTimeout(context.Background(), config.Instance().Graceful.Timeout)
 		defer cancel()
+
+		slog.Info("Ожидание прекращения нового трафика", "delay", config.Instance().Graceful.Delay)
+		time.Sleep(config.Instance().Graceful.Delay)
 
 		// Synchronize Stop with Clay initialization, including a shutdown before
 		// the first external request. The admin listener starts independently.
@@ -207,18 +211,6 @@ func (a *App) initHealthCheck(_ context.Context) error {
 		return fmt.Errorf("Приложение останавливается")
 	})
 
-	a.publicCloser.Add(func() error {
-		slog.Info(
-			"Получен сигнал остановки",
-			"service",
-			"profile",
-			"timeout",
-			config.Instance().Graceful.Timeout,
-		)
-
-		atomic.StoreInt32(&a.terminated, 1)
-		return nil
-	})
 	return nil
 }
 

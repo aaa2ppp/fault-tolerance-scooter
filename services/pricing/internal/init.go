@@ -219,18 +219,6 @@ func (a *App) initHealthCheck(_ context.Context) error {
 		return fmt.Errorf("Приложение останавливается")
 	})
 
-	a.publicCloser.Add(func() error {
-		slog.Info(
-			"Получен сигнал остановки",
-			"service",
-			"pricing",
-			"timeout",
-			config.Instance().Graceful.Timeout,
-		)
-
-		atomic.StoreInt32(&a.terminated, 1)
-		return nil
-	})
 	return nil
 }
 

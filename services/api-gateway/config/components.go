@@ -16,5 +16,6 @@ type HttpServer struct {
 }
 
 type Graceful struct {
+	Delay   time.Duration `yaml:"delay" env:"GRACEFUL_DELAY"`
 	Timeout time.Duration `yaml:"timeout" env:"GRACEFUL_TIMEOUT"`
 }
