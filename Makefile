@@ -33,3 +33,13 @@ generate-xo:
 migrate:
 	@test -n "$(SERVICE)" || (echo 'Specify SERVICE and POSTGRES_DSN' >&2; exit 1)
 	goose -dir "services/$(SERVICE)/tools/migrations" postgres "$$POSTGRES_DSN" up
+	
+.PHONY: clean-bin clean-images
+clean-images:
+	@for svc in $(SERVICES); do \
+		for img in $$(docker images --format='{{.Repository}}:{{.Tag}}' scooterflow/$$svc); do \
+			docker image rm $$img || true; \
+		done; \
+	done
+clean-bin:
+	-@rm -fr bin
