@@ -59,6 +59,14 @@ func (w *PrefixWriter) Write(b []byte) (int, error) {
 	return n, nil
 }
 
+func (w *PrefixWriter) Prefix(prefix string) {
+	if len(w.prefixTail) == 0 {
+		w.prefix = append(w.prefix[:0], prefix...)
+	} else {
+		w.prefix = []byte(prefix)
+	}
+}
+
 type TimestampWriter struct {
 	pw     PrefixWriter
 	layout string
