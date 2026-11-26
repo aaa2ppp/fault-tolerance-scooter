@@ -26,6 +26,8 @@ func Instance() *Config {
 }
 
 type Config struct {
+	Cache           Cache             `yaml:"cache"`
+	ValkeyAddresses []string          `yaml:"valkey_addresses" env:"VALKEY_ADDRESSES" env-separator:","`
 	TargetOverrides map[string]string `yaml:"-" env:"SERVICE_TARGETS"`
 	Postgres        Postgres          `yaml:"postgres"`
 	PostgresDSN     string            `yaml:"postgres_dsn" env:"POSTGRES_DSN"`
@@ -59,6 +61,9 @@ func Read() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if c.Cache.TTL <= 0 {
+		return fmt.Errorf("cache.ttl must be positive")
+	}
 	for name, port := range map[string]int{
 		"HTTP_PORT":       c.HttpServer.Port,
 		"GRPC_PORT":       c.GrpcServer.Port,

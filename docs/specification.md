@@ -17,7 +17,7 @@ Kafka, k3s в Docker, Buf, Goose, xo, ручной DI и Clean Architecture.
 Gateway не имеет БД, domain/usecase/storage. Четыре PostgreSQL физически
 разделены; никакой SQL к чужой БД. Никаких зависимостей от hotel.
 `PREMUIM` в постановке нормализовано до `PREMIUM` в контрактах.
-Redis пока отсутствует. Нет реального эквайринга, кошелька и телеметрии:
+В модуле 10 Profile читает скидку из Valkey Cluster. При промахе он получает данные из своей БД и Pricing, возвращает скидку и в фоне выполняет SET с TTL 10 минут. Нет реального эквайринга, кошелька и телеметрии:
 pricing учитывает учебное списание/возврат в собственной БД, scooter хранит
 переданное оператором состояние. Наезд отдаётся в секундах, часы = seconds/3600.
 
@@ -54,7 +54,7 @@ UUID v4 создаются через uuid.NewV4, время UTC с точнос
 
 ## События и стоимость
 
-Один прикладной топик `rental.events.v1`, key = UUID rental_id, hash partitioner.
+Поездки публикуются в `rental.events.v1`, key = UUID rental_id, hash partitioner. Для задания по инвалидации подготовлен `user-discount-invalidate.v1` с ключом пользователя.
 События `rental.reserved.v1`, `rental.started.v1`, `rental.completed.v1`,
 `rental.canceled.v1`. Envelope: correlation_id (UUID события), event_type,
 rental_id, rental_version, occurred_at, request_id, payload. Payload содержит

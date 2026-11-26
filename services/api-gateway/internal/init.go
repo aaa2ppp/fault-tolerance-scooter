@@ -194,12 +194,14 @@ func (a *App) initAdminServer(ctx context.Context) error {
 
 func (a *App) initGrpcConn(_ context.Context) error {
 	for srv, address := range config.Instance().Targets {
-		var err error
-
-		conn, err := grpc.NewClient(address,
+		opts := []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithUnaryInterceptor(intercept.ProxyMetadata()),
-		)
+		}
+		if srv == config.ProfileService {
+			opts = append(opts, grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`))
+		}
+		conn, err := grpc.NewClient(address, opts...)
 
 		if err != nil {
 			return fmt.Errorf(

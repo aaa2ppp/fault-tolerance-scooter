@@ -111,7 +111,20 @@ func ResetResources(root, name string) (*corev1.ConfigMap, *batchv1.Job, error) 
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: boolPointer(false),
-					InitContainers:               databases,
+					InitContainers: append(databases, corev1.Container{
+						Name:  "valkey",
+						Image: valkeyImage,
+						Command: []string{"sh", "-ec", `
+for i in 0 1 2 3 4 5; do
+    host="valkey-$i.valkey-headless"
+    role=$(valkey-cli -e --raw -h "$host" ROLE | head -n 1)
+    case "$role" in
+        master) valkey-cli -e -h "$host" FLUSHDB SYNC ;;
+        slave) ;;
+        *) echo "Не удалось определить роль $host" >&2; exit 1 ;;
+    esac
+done`},
+					}),
 					Containers: []corev1.Container{{
 						Name:  "kafka",
 						Image: "apache/kafka:3.9.1",
@@ -144,12 +157,12 @@ func ResetResources(root, name string) (*corev1.ConfigMap, *batchv1.Job, error) 
 
 const resetKafka = `set -eu
 cd /opt/kafka/bin
-for topic in rental.events.v1; do
+for topic in rental.events.v1 user-discount-invalidate.v1; do
     ./kafka-topics.sh --bootstrap-server kafka:9092 --delete --if-exists --topic "$topic"
 done
 while :; do
     topics=$(./kafka-topics.sh --bootstrap-server kafka:9092 --list)
-    if ! printf '%s\n' "$topics" | grep -Eq '^rental\.events\.v1$'; then
+    if ! printf '%s\n' "$topics" | grep -Eq '^(rental\.events|user-discount-invalidate)\.v1$'; then
         break
     fi
     sleep 1
@@ -167,8 +180,10 @@ for group in "$@"; do
         exit 1
     fi
 done
-for topic in rental.events.v1; do
-    ./kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1
+for topic in rental.events.v1 user-discount-invalidate.v1; do
+    partitions=1
+    if [ "$topic" = user-discount-invalidate.v1 ]; then partitions=3; fi
+    ./kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions "$partitions" --replication-factor 1
 done
 `
 
@@ -255,7 +270,7 @@ func (c *Client) ResetData(ctx context.Context, cm *corev1.ConfigMap, job *batch
 			return err
 		}
 	}
-	fmt.Fprintf(out, "Сброс данных: job/%s (БД, seed, Kafka и offsets)\n", job.Name)
+	fmt.Fprintf(out, "Сброс данных: job/%s (БД, seed, кеш, Kafka и offsets)\n", job.Name)
 	return c.WaitJob(ctx, standNamespace, job.Name)
 }
 

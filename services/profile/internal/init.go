@@ -15,6 +15,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/not-for-prod/clay/server"
 	"github.com/not-for-prod/clay/transport"
+	"github.com/valkey-io/valkey-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -24,6 +25,7 @@ import (
 	profileapp "profile/internal/app/profile/v1"
 	"profile/internal/application/service"
 	"profile/internal/application/usecase"
+	"profile/internal/infrastructure/adapter"
 	"profile/internal/infrastructure/gateway"
 	"profile/internal/infrastructure/storage"
 	"profile/internal/pkg/closer"
@@ -228,8 +230,13 @@ func (a *App) initStorage(context.Context) error {
 	return nil
 }
 
+func (a *App) initAdapters(context.Context) error {
+	a.adapters = adapter.NewRegistry(a.valkey, a.storage, a.gateways)
+	return nil
+}
+
 func (a *App) initUsecases(context.Context) error {
-	a.usecases = usecase.NewRegistry(a.storage, a.services, a.gateways)
+	a.usecases = usecase.NewRegistry(a.storage, a.services, a.adapters)
 	return nil
 }
 
@@ -240,5 +247,22 @@ func (a *App) initServices(context.Context) error {
 
 func (a *App) initGateway(context.Context) error {
 	a.gateways = gateway.NewRegistry(a.grpcConn)
+	return nil
+}
+
+func (a *App) initValkey(_ context.Context) error {
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:  config.Instance().ValkeyAddresses,
+		DisableCache: true,
+	})
+	if err != nil {
+		return fmt.Errorf("[VALKEY] Не удалось инициализировать клиент: %w", err)
+	}
+
+	a.valkey = client
+	closer.Add(func() error {
+		client.Close()
+		return nil
+	})
 	return nil
 }

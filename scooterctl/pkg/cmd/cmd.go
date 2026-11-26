@@ -64,5 +64,6 @@ func NewScooterctlCommand(f util.Factory, streams iostreams.IOStreams, version s
 	command.AddCommand(status.NewCmdStatus(f, streams))
 	command.AddCommand(logs.NewCmdLogs(f, streams))
 	command.AddCommand(kubectl.NewCmdKubectl(f, streams))
+	command.AddCommand(kubectl.NewCmdValkey(f, streams))
 	return command
 }

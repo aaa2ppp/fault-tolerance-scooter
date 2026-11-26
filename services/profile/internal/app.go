@@ -16,11 +16,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/not-for-prod/clay/server"
 	"github.com/not-for-prod/clay/transport"
+	"github.com/valkey-io/valkey-go"
 	"google.golang.org/grpc"
 
 	"profile/config"
 	"profile/internal/application/service"
 	"profile/internal/application/usecase"
+	"profile/internal/infrastructure/adapter"
 	"profile/internal/infrastructure/gateway"
 	"profile/internal/infrastructure/storage"
 	"profile/internal/pkg/closer"
@@ -29,11 +31,15 @@ import (
 
 // App application
 type App struct {
-	gateways   *gateway.Registry
-	pool       *pgxpool.Pool
-	storage    *storage.Registry
-	services   *service.Registry
-	usecases   *usecase.Registry
+	pool   *pgxpool.Pool
+	valkey valkey.Client
+
+	storage  *storage.Registry
+	adapters *adapter.Registry
+	gateways *gateway.Registry
+	services *service.Registry
+	usecases *usecase.Registry
+
 	mainServer *server.Server
 
 	adminListener net.Listener
@@ -134,8 +140,10 @@ func (a *App) init(ctx context.Context) error {
 		a.initGrpcConn,
 		a.initGateway,
 		a.initPostgres,
+		a.initValkey,
 		a.initStorage,
 		a.initServices,
+		a.initAdapters,
 		a.initUsecases,
 		a.initControllers,
 	}

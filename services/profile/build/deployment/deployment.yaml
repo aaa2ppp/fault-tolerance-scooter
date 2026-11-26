@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/name: profile
     app.kubernetes.io/part-of: scooterflow
 spec:
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate

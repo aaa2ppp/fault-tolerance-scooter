@@ -21,7 +21,7 @@ import (
 
 const standNamespace = "scooterflow"
 const gooseImage = "ghcr.io/kukymbr/goose-docker:3.26.0@sha256:0cd025636df126e7f66472861ca4db3683bc649be46cd1f6ef1a316209058e23"
-const migrationJobRevision = "v1-scooter-four-databases"
+const migrationJobRevision = "v2-discount-invalidation-topic"
 
 type DependencyResources struct {
 	Infrastructure []*unstructured.Unstructured
@@ -145,7 +145,8 @@ func RenderDependencies(root string) (DependencyResources, error) {
 								"/bin/sh",
 								"-ec",
 							},
-							Args: []string{`/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic rental.events.v1 --partitions 1 --replication-factor 1`},
+							Args: []string{`/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic rental.events.v1 --partitions 1 --replication-factor 1
+/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic user-discount-invalidate.v1 --partitions 3 --replication-factor 1`},
 							Env: []corev1.EnvVar{{
 								Name:  "KAFKA_HEAP_OPTS",
 								Value: "-Xms128m -Xmx256m",

@@ -13,10 +13,13 @@ func (i *Implementation) GetDiscount(ctx context.Context, request *pb.GetDiscoun
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GetDiscountResponse{
-		DiscountPercent:     result.Percent,
-		CompletedTripsCount: result.CompletedTripsCount,
-		Degraded:            result.Degraded,
-		Source:              result.Source,
-	}, nil
+	response := &pb.GetDiscountResponse{
+		DiscountPercent: result.Percent,
+		Degraded:        result.Degraded,
+		Source:          result.Source,
+	}
+	if !result.Degraded {
+		response.CompletedTripsCount = &result.CompletedTripsCount
+	}
+	return response, nil
 }

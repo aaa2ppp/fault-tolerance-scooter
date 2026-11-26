@@ -14,7 +14,7 @@ http_server:
   admin_port: 8081
 
 service:
-  profile: "profile:9090"
+  profile: "dns:///profile-headless:9090"
   scooter: "scooter:9090"
   rental: "rental:9090"
   pricing: "pricing:9090"

@@ -1,6 +1,8 @@
 package load
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -73,5 +75,33 @@ func TestRepeatedMetadata(t *testing.T) {
 	}
 	if len(metadata["x-tag"]) != 2 {
 		t.Fatal("repeated metadata lost")
+	}
+}
+
+func TestLoadDataFile(t *testing.T) {
+	for _, tt := range []struct {
+		body  string
+		count int
+	}{
+		{`{"userId":"1"}`, 1},
+		{`[{"userId":"1"}, {"userId":"2"}]`, 2},
+		{`[]`, 0},
+		{`[{}, null]`, 0},
+		{`[{}, []]`, 0},
+	} {
+		t.Run(tt.body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "users.json")
+			if err := os.WriteFile(path, []byte(tt.body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			o := options{
+				addr: "localhost:9090", method: "example.Service/Read", dataFile: path,
+				rps: 1, clients: 1, duration: time.Second, requestTimeout: time.Second,
+			}
+			bodies, _, err := o.validate()
+			if (err != nil) != (tt.count == 0) || len(bodies) != tt.count {
+				t.Fatalf("bodies=%s, err=%v", bodies, err)
+			}
+		})
 	}
 }

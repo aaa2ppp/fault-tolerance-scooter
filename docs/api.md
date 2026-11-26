@@ -5,6 +5,7 @@ HTTP-шлюз: `http://localhost:18080`. Swagger: `/docs/`, схема: `/swagge
 
 | HTTP | Путь | RPC владельца |
 |---|---|---|
+| GET | `/v1/profiles/{user_id}/discount` | `profile.profile.v1.ProfileService/GetDiscount` |
 | GET | `/v1/profiles/{user_id}` | `profile.profile.v1.ProfileService/GetProfile` |
 | GET | `/v1/profiles` | `profile.profile.v1.ProfileService/ListProfiles` |
 | PATCH | `/v1/profiles/{user_id}` | `profile.profile.v1.ProfileService/UpdateProfile` |

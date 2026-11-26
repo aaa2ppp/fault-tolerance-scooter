@@ -9,5 +9,6 @@ resources:
   - profile-postgres.yaml
   - scooter-postgres.yaml
   - kafka.yaml
+  - valkey.yaml
   - akhq.yaml
   - config-etcd.yaml

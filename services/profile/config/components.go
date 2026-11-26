@@ -26,3 +26,7 @@ type Postgres struct {
 	MaxIdleConnections int32         `yaml:"max_idle_connections"`
 	MaxConnLifetime    time.Duration `yaml:"max_conn_lifetime"`
 }
+
+type Cache struct {
+	TTL time.Duration `yaml:"ttl"`
+}

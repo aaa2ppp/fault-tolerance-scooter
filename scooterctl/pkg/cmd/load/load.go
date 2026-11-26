@@ -37,7 +37,7 @@ func NewCmdLoad(f util.Factory, streams iostreams.IOStreams) *cobra.Command {
 	o := &options{}
 	cmd := &cobra.Command{
 		Use: "load", Short: "gRPC-нагрузка через Framer: endpoint, JSON, RPS и длительность",
-		Long: "Постоянная нагрузка на unary gRPC через Framer. Plaintext, deadline запроса задаётся --request-timeout.\nReflection включена по умолчанию; без неё используйте --proto и --import-path.\nКаждый запрос повторяет заданное тело. Автоматических ретраев запросов нет.",
+		Long: "Постоянная нагрузка на unary gRPC через Framer. Plaintext, deadline запроса задаётся --request-timeout.\nReflection включена по умолчанию; без неё используйте --proto и --import-path.\nМассив в --data-file задаёт набор тел для нагрузки. Автоматических ретраев запросов нет.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			payload, metadata, err := o.validate()
@@ -55,7 +55,7 @@ func NewCmdLoad(f util.Factory, streams iostreams.IOStreams) *cobra.Command {
 	flags.StringVar(&o.addr, "addr", "", "gRPC endpoint host:port (без TLS)")
 	flags.StringVar(&o.method, "method", "", "Полное имя package.Service/Method")
 	flags.StringVar(&o.data, "data", "{}", "JSON-тело запроса")
-	flags.StringVar(&o.dataFile, "data-file", "", "Файл с JSON-телом")
+	flags.StringVar(&o.dataFile, "data-file", "", "JSON-файл с телом запроса или массивом тел")
 	flags.IntVar(&o.rps, "rps", 0, "Общий RPS для всех соединений")
 	flags.DurationVar(&o.duration, "duration", 0, "Длительность подачи нагрузки, например 30s или 5m")
 	flags.DurationVar(&o.requestTimeout, "request-timeout", 3*time.Second, "Deadline одного запроса, от 1ms до 1m; не ограничивает весь прогон")
@@ -68,7 +68,7 @@ func NewCmdLoad(f util.Factory, streams iostreams.IOStreams) *cobra.Command {
 	return cmd
 }
 
-func (o *options) validate() (json.RawMessage, map[string][]string, error) {
+func (o *options) validate() ([]json.RawMessage, map[string][]string, error) {
 	if host, port, err := net.SplitHostPort(o.addr); err != nil || host == "" || port == "" {
 		return nil, nil, fmt.Errorf("--addr должен иметь вид host:port")
 	}
@@ -103,9 +103,20 @@ func (o *options) validate() (json.RawMessage, map[string][]string, error) {
 			return nil, nil, err
 		}
 	}
-	var object map[string]json.RawMessage
-	if len(payload) > 1<<20 || json.Unmarshal(payload, &object) != nil || object == nil {
-		return nil, nil, fmt.Errorf("тело должно быть JSON-объектом размером до 1 MiB")
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 || len(payload) > 1<<20 {
+		return nil, nil, fmt.Errorf("укажите JSON размером до 1 MiB")
+	}
+	bodies := []json.RawMessage{payload}
+	if o.dataFile != "" && payload[0] == '[' {
+		if err := json.Unmarshal(payload, &bodies); err != nil || len(bodies) == 0 {
+			return nil, nil, fmt.Errorf("--data-file должен содержать непустой массив тел запросов")
+		}
+	}
+	for i, body := range bodies {
+		if len(body) == 0 || body[0] != '{' || !json.Valid(body) {
+			return nil, nil, fmt.Errorf("тело запроса %d должно быть JSON-объектом", i+1)
+		}
 	}
 	metadata := map[string][]string{}
 	for _, header := range o.headers {
@@ -123,7 +134,7 @@ func (o *options) validate() (json.RawMessage, map[string][]string, error) {
 	if len(o.protos) == 0 && len(o.imports) > 0 {
 		return nil, nil, fmt.Errorf("--import-path требует --proto")
 	}
-	return payload, metadata, nil
+	return bodies, metadata, nil
 }
 
 func ensureFramer(ctx context.Context, root string, out io.Writer) (string, error) {
@@ -155,7 +166,7 @@ func ensureFramer(ctx context.Context, root string, out io.Writer) (string, erro
 	return bin, nil
 }
 
-func (o *options) run(ctx context.Context, root string, s iostreams.IOStreams, payload json.RawMessage, metadata map[string][]string) error {
+func (o *options) run(ctx context.Context, root string, s iostreams.IOStreams, bodies []json.RawMessage, metadata map[string][]string) error {
 	bin, err := ensureFramer(ctx, root, s.ErrOut)
 	if err != nil {
 		return err
@@ -176,16 +187,19 @@ func (o *options) run(ctx context.Context, root string, s iostreams.IOStreams, p
 	report := filepath.Join(dir, "report.phout")
 	defer os.Remove(input)
 	defer os.Remove(binary)
-	ammo, err := json.Marshal(map[string]any{
-		"tag":      "request",
-		"call":     strings.Replace(o.method, "/", ".", 1),
-		"metadata": metadata,
-		"payload":  payload,
-	})
-	if err != nil {
-		return err
+	var ammo bytes.Buffer
+	encoder := json.NewEncoder(&ammo)
+	for _, body := range bodies {
+		if err := encoder.Encode(map[string]any{
+			"tag":      "request",
+			"call":     strings.Replace(o.method, "/", ".", 1),
+			"metadata": metadata,
+			"payload":  body,
+		}); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(input, append(ammo, '\n'), 0600); err != nil {
+	if err := os.WriteFile(input, ammo.Bytes(), 0600); err != nil {
 		return err
 	}
 	args := []string{"convert", "--from=ozon.json", "--to=ozon.binary"}
