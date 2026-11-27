@@ -114,7 +114,7 @@ func (m *Manager) build(ctx context.Context, state *project.State, services []co
 	return nil
 }
 
-var needPreload = env.OnEnv("PRELOAD")
+var needPreload = env.OnEnv("PRELOAD", true)
 
 func (m *Manager) deploy(
 	ctx context.Context,
