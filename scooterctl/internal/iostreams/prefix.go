@@ -124,13 +124,14 @@ func (w *LineWriter) Flush() error {
 	if w.buf[len(w.buf)-1] != '\n' {
 		w.buf = append(w.buf, '\n')
 	}
+	size := len(w.buf)
 	n, err := w.w.Write(w.buf)
 	n2 := copy(w.buf, w.buf[n:])
 	w.buf = w.buf[:n2]
 	if err != nil {
 		return err
 	}
-	if n != len(w.buf) {
+	if n != size {
 		return io.ErrShortWrite
 	}
 	return nil

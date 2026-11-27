@@ -1,9 +1,22 @@
 package iostreams
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
+
+type errWriter struct {
+	buf strings.Builder
+	n   int
+	err error
+}
+
+func (w *errWriter) Write(p []byte) (int, error) {
+	n := min(w.n, len(p))
+	w.buf.Write(p[:n])
+	return n, w.err
+}
 
 func TestPrefixWriter_Write(t *testing.T) {
 	const P = "PREFIX "
@@ -126,6 +139,62 @@ func TestPrefixWriter_Write(t *testing.T) {
 			gotContent := tt.w.String()
 			if gotContent != tt.wantContent {
 				t.Errorf("Write() content = %q, want %q", gotContent, tt.wantContent)
+			}
+		})
+	}
+}
+
+func TestPrefixWriter_WriteError(t *testing.T) {
+	const P = "PREFIX "
+	tests := []struct {
+		name    string
+		input   string
+		n       int
+		err     error
+		wantOut string
+		wantErr bool
+	}{
+		{
+			"success",
+			"hello world\n",
+			256,
+			nil,
+			P + "hello world\n",
+			false,
+		},
+		{
+			"underlying error",
+			"hello world\n",
+			256,
+			fmt.Errorf("underlying error"),
+			"",
+			true,
+		},
+		{
+			"short write",
+			"hello world\n",
+			5,
+			nil,
+			"",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ew := &errWriter{n: tt.n, err: tt.err}
+			pw := NewPrefixWriter(ew, P)
+
+			_, err := pw.Write([]byte(tt.input))
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Flush() error = %v, want %v", err, tt.wantErr)
+			}
+
+			if err == nil {
+				if out := ew.buf.String(); out != tt.wantOut {
+					t.Errorf("Flush() out = %q, want %q", out, tt.wantOut)
+				}
 			}
 		})
 	}
