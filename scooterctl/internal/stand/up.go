@@ -3,6 +3,7 @@ package stand
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/f0rmul11/fault-tolerance-scooter/scooterctl/internal/config"
@@ -214,6 +215,22 @@ func (m *Manager) ensureValkeyInitialized(
 	if err := client.WaitValkeyRunning(ctx); err != nil {
 		return err
 	}
+	checkExec := []string{"kubectl", "-n", "scooterflow", "exec", "valkey-0", "--", "sh", "-c", "true"}
+	for i := 0; ; i++ {
+		err := m.Runtime.Exec(ctx, state, checkExec, nil, m.Streams.Out, m.Streams.ErrOut)
+		if err == nil {
+			break
+		}
+		if env.Debug {
+			log.Printf("wait valkey-0 (%d): %v", i, err)
+		}
+		tm := time.NewTimer(10 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tm.C:
+		}
+	}
 	bootstrap := []string{"kubectl", "-n", "scooterflow", "exec", "valkey-0", "--", "sh", "-ec", kube.BootstrapValkey}
 	if err := m.Runtime.Exec(ctx, state, bootstrap, nil, m.Streams.Out, m.Streams.ErrOut); err != nil {
 		return fmt.Errorf("инициализация Valkey: %w", err)
@@ -245,7 +262,10 @@ func (m *Manager) deployDependencies(
 	}, m.Streams.Out); err != nil {
 		return err
 	}
-	m.ensureValkeyInitialized(ctx, state, client)
+
+	if err := m.ensureValkeyInitialized(ctx, state, client); err != nil {
+		return err
+	}
 	return nil
 }
 

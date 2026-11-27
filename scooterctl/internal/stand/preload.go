@@ -18,6 +18,15 @@ import (
 func (m *Manager) preload(ctx context.Context, state *project.State, images []string) error {
 	out := m.Streams.Out
 
+	// TODO: убрать в конфигурацию etc (ближе к созданию k3s контейнера)
+	images = append(images,
+		"docker.io/rancher/local-path-provisioner:v0.0.34",
+		"docker.io/rancher/mirrored-coredns-coredns:1.14.1",
+		"docker.io/rancher/mirrored-library-busybox:1.37.0",
+		"docker.io/rancher/mirrored-metrics-server:v0.8.1",
+		"docker.io/rancher/mirrored-pause:3.6",
+	)
+
 	if len(images) == 0 {
 		return nil
 	}
