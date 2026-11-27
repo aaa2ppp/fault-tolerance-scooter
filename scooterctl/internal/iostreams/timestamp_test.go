@@ -1,7 +1,6 @@
 package iostreams
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -141,41 +140,58 @@ func TestTimestampWriter_Write(t *testing.T) {
 	}
 }
 
-type errWriter struct {
-	buf strings.Builder
-	n   int
-	err error
-}
-
-func (w *errWriter) Write(p []byte) (int, error) {
-	if w.err != nil {
-		w.buf.Write(p[:w.n])
-		return w.n, w.err
-	}
-	return w.buf.Write(p)
-}
-
 func TestTimestampWriter_WriteError(t *testing.T) {
-	want := "hello\n"
-	wantErr := errors.New("write failed")
-
-	w := &errWriter{n: 10, err: wantErr}
-	to := NewTimestampWriter(w, tsFmt)
-
-	n, err := to.Write([]byte(want))
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Write() error = %v, want %v", err, wantErr)
+	tests := []struct {
+		name    string
+		input   string
+		n       int
+		err     error
+		wantOut string
+		wantErr bool
+	}{
+		{
+			"success",
+			"hello world\n",
+			256,
+			nil,
+			"hello world\n",
+			false,
+		},
+		{
+			"underlying error",
+			"hello world\n",
+			256,
+			fmt.Errorf("underlying error"),
+			"",
+			true,
+		},
+		{
+			"short write",
+			"hello world\n",
+			5,
+			nil,
+			"",
+			true,
+		},
 	}
 
-	w.err = nil
-	_, err = to.Write([]byte(want[n:]))
-	if err != nil {
-		t.Fatalf("Write() unexpected error: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ew := &errWriter{n: tt.n, err: tt.err}
+			tw := NewTimestampWriter(ew, tsFmt)
 
-	out := stripTS(w.buf.String())
-	if out != want {
-		t.Fatalf("Write() out = %q, want %q", out, want)
+			_, err := tw.Write([]byte(tt.input))
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Flush() error = %v, want %v", err, tt.wantErr)
+			}
+
+			if err == nil {
+				if out := ew.buf.String(); !strings.HasSuffix(out, tt.wantOut) {
+					t.Errorf("Flush() out = %q, want <timestamp> + %q", out, tt.wantOut)
+				}
+			}
+		})
 	}
 }
 
